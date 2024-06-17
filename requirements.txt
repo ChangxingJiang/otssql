@@ -1,0 +1,3 @@
+metasequoia_sql>=0.6.0
+setuptools==69.2.0
+tablestore==5.4.2
