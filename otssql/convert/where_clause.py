@@ -17,11 +17,11 @@ import tablestore
 from metasequoia_sql import node
 from otssql.exceptions import NotSupportedError
 
-__all__ = ["convert_where_clause"]
+__all__ = ["convert_where_clause_as_search_index"]
 
 
-def convert_where_clause(where_clause: node.ASTWhereClause) -> tablestore.Query:
-    """将 WHERE 语句转化为 TableStore 的查询条件
+def convert_where_clause_as_search_index(where_clause: node.ASTWhereClause) -> tablestore.Query:
+    """将 WHERE 语句转化为 TableStore 多元索引查询方式的查询条件
 
     Parameters
     ----------

@@ -20,7 +20,7 @@ def execute_select_group_by(ots_client: tablestore.OTSClient,
                             statement: node.ASTSingleSelectStatement,
                             max_group_size: int) -> Tuple[List[tuple], List[tuple]]:
     """执行包含 GROUP BY 的 SELECT 语句"""
-    query = convert.convert_where_clause(statement.where_clause)
+    query = convert.convert_where_clause_as_search_index(statement.where_clause)
     select_column_set = get_select_column_set(statement.select_clause)
 
     # ------------------------------ 分析 ORDER BY 字段 ------------------------------

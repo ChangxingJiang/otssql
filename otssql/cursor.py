@@ -8,8 +8,8 @@ from typing import Optional
 
 from metasequoia_sql import SQLParser, node
 from otssql import convert, strategy
-from otssql.metasequoia_enhance import is_aggregation_query
 from otssql.exceptions import NotSupportedError, ProgrammingError
+from otssql.metasequoia_enhance import is_aggregation_query
 
 __all__ = ["Cursor", "DictCursor"]
 
@@ -310,6 +310,9 @@ class Cursor:
         if isinstance(statement, node.ASTSingleSelectStatement):
             if statement.group_by_clause is not None:
                 # 执行包含 GROUP BY 的 SELECT 语句
+                if index_name == "PrimaryKey":
+                    raise ProgrammingError("无法在包含 GROUP BY 子句的情况下使用主键索引")
+
                 # TODO 增加 GROUP BY 语句包含通配符的异常
                 self.current_result, self.description = strategy.execute_select_group_by(
                     self.connection.ots_client, table_name, index_name, statement,
@@ -328,6 +331,9 @@ class Cursor:
                 self.current_idx = 0
                 self.rowcount = len(self.current_result)
                 return self.rowcount
+
+            if index_name == "PrimaryKey":
+                raise ProgrammingError("无法在包含聚合函数的情况下使用主键索引")
 
             # 执行包含聚合的 SELECT 语句
             self.current_result, self.description = strategy.execute_select_aggregation(self.connection.ots_client,

@@ -48,13 +48,13 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
     description : List[tuple]
         字段描述信息
     """
-    query = convert.convert_where_clause(statement.where_clause)
     sort = convert.convert_order_by_clause(statement.order_by_clause)
     offset, limit = convert.convert_limit_clause(statement.limit_clause, max_select_row,
                                                  max_row_total_limit=max_row_total_limit)
 
     select_column_set = get_select_column_set(statement.select_clause)
 
+    query = convert.convert_where_clause_as_search_index(statement.where_clause)
     query_result = list(sdk_api.do_query(
         ots_client=ots_client, table_name=table_name, index_name=index_name,
         query=query, sort=sort, offset=offset, limit=limit,

@@ -20,7 +20,7 @@ def execute_select_aggregation(ots_client: tablestore.OTSClient,
                                statement: node.ASTSingleSelectStatement) -> Tuple[List[tuple], List[tuple]]:
     """执行包含聚合的 SELECT 语句"""
 
-    query = convert.convert_where_clause(statement.where_clause)
+    query = convert.convert_where_clause_as_search_index(statement.where_clause)
 
     # 生成聚合条件的结果字段
     sub_aggs = []
