@@ -54,7 +54,7 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
 
     select_column_set = get_select_column_set(statement.select_clause)
 
-    query = convert.convert_where_clause_as_search_index(statement.where_clause)
+    query = convert.convert_where_clause(statement.where_clause)
     query_result = list(sdk_api.do_query(
         ots_client=ots_client, table_name=table_name, index_name=index_name,
         query=query, sort=sort, offset=offset, limit=limit,

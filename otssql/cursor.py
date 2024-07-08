@@ -311,7 +311,7 @@ class Cursor:
             if statement.group_by_clause is not None:
                 # 执行包含 GROUP BY 的 SELECT 语句
                 if index_name == "PrimaryKey":
-                    raise ProgrammingError("无法在包含 GROUP BY 子句的情况下使用主键索引")
+                    raise NotSupportedError("无法在包含 GROUP BY 子句的情况下使用主键索引")
 
                 # TODO 增加 GROUP BY 语句包含通配符的异常
                 self.current_result, self.description = strategy.execute_select_group_by(
@@ -333,7 +333,7 @@ class Cursor:
                 return self.rowcount
 
             if index_name == "PrimaryKey":
-                raise ProgrammingError("无法在包含聚合函数的情况下使用主键索引")
+                raise NotSupportedError("无法在包含聚合函数的情况下使用主键索引")
 
             # 执行包含聚合的 SELECT 语句
             self.current_result, self.description = strategy.execute_select_aggregation(self.connection.ots_client,

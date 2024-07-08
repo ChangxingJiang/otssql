@@ -19,7 +19,7 @@ def execute_delete(ots_client: tablestore.OTSClient,
                    max_row_total_limit: int):
     """执行 DELETE 语句"""
 
-    query = convert.convert_where_clause_as_search_index(statement.where_clause)  # 转换 WHERE 子句的逻辑
+    query = convert.convert_where_clause(statement.where_clause)  # 转换 WHERE 子句的逻辑
     sort = convert.convert_order_by_clause(statement.order_by_clause)  # 转换 ORDER BY 子句的逻辑
     offset, limit = convert.convert_limit_clause(
         statement.limit_clause, max_delete_row,

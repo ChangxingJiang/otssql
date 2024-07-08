@@ -6,6 +6,8 @@ from typing import Generator
 
 import tablestore
 
+from otssql.exceptions import NotSupportedError
+
 
 def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
              query: tablestore.Query, sort: tablestore.Sort, offset: int, limit: int,
@@ -65,5 +67,60 @@ def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
         for row in search_response.rows:
             yield row
             n_yield += 1
+            if n_yield >= limit:
+                return
+
+
+def do_query_use_primary_key(ots_client: tablestore.OTSClient, table_name: str, offset: int, limit: int,
+                             ) -> Generator[tuple, None, None]:
+    """使用主键索引执行查询，并 yield 每一个生产结果
+
+    Parameters
+    ----------
+    ots_client : tablestore.OTSClient
+        OTS 客户端
+    table_name : str
+        OTS 表名
+    offset : int
+        LIMIT 子句中的 OFFSET
+    limit : int
+        LIMIT 子句中的 LIMIT
+
+    Yields
+    ------
+    tuple
+        每个字段的信息
+    """
+    if offset != 0:
+        raise NotSupportedError("使用主键索引时不支持 ORDER BY 子句的 offset 条件")
+
+    consumed, next_start_primary_key, row_list, next_token = ots_client.get_range(
+        table_name,
+        tablestore.Direction.FORWARD,
+        inclusive_start_primary_key, exclusive_end_primary_key,
+        limit,
+        max_version=1
+    )
+
+    for row in row_list:
+        yield row
+        n_yield = 0
+        if n_yield >= limit:
+            return
+
+    # 当 next_start_primary_key 不为空时，则继续读取数据
+    while next_start_primary_key is not None:
+        inclusive_start_primary_key = next_start_primary_key
+        consumed, next_start_primary_key, row_list, next_token = ots_client.get_range(
+            table_name,
+            tablestore.Direction.FORWARD,
+            inclusive_start_primary_key, exclusive_end_primary_key,
+            limit,
+            max_version=1
+        )
+
+        for row in row_list:
+            yield row
+            n_yield = 0
             if n_yield >= limit:
                 return

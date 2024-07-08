@@ -8,4 +8,4 @@ from otssql.convert.order_by_clause import (convert_order_type, convert_order_by
                                             covert_order_by_clause_to_cmp_function)
 from otssql.convert.table_name import convert_table_name
 from otssql.convert.update_set_clause import convert_update_set_clause
-from otssql.convert.where_clause import convert_where_clause_as_search_index
+from otssql.convert.where_clause import convert_where_clause
