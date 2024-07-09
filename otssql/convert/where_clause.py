@@ -19,7 +19,7 @@ import tablestore
 from metasequoia_sql import node
 from otssql.exceptions import NotSupportedError, ProgrammingError
 
-__all__ = ["convert_where_clause"]
+__all__ = ["convert_where_clause", "convert_where_clause_to_range"]
 
 
 def convert_where_clause(where_clause: node.ASTWhereClause) -> tablestore.Query:
@@ -258,6 +258,9 @@ def convert_where_clause_to_range(ots_client: tablestore.OTSClient,
             start_primary_key.append((field_name, tablestore.INF_MIN))
             end_primary_key.append((field_name, tablestore.INF_MAX))
         return start_primary_key, end_primary_key
+
+    conditions = change_ast_node_to_primary_key_condition(where_clause)
+    print(conditions)
 
 
 def change_ast_node_to_primary_key_condition(ast_node: node.ASTBase) -> List[Tuple[str, str, Any]]:

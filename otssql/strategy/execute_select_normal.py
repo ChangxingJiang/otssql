@@ -9,6 +9,7 @@ import tablestore
 from metasequoia_sql import node
 from otssql import convert, sdk_api
 from otssql.constants import FieldType
+from otssql.exceptions import NotSupportedError
 from otssql.metasequoia_enhance import get_select_column_set
 from otssql.strategy.detect_type import detect_field_type
 
