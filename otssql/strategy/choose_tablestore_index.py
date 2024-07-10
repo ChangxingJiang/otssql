@@ -1,10 +1,10 @@
 """
 自动选择 tablestore 的多元索引
 """
-
+import collections
 import dataclasses
 import enum
-from typing import List, Optional
+from typing import List, Optional, Tuple, Any
 
 import tablestore
 
@@ -47,6 +47,9 @@ class UseIndex:
     # 主键结束值（仅主键索引 - 读取范围数据使用）
     end_key: Optional[List[tuple]] = dataclasses.field(kw_only=True, default=None)
 
+    # 主键顺序（仅主键索引 - 读取范围数据使用）
+    direction: Optional[str] = dataclasses.field(kw_only=True, default=None)
+
 
 def choose_tablestore_index(ots_client: tablestore.OTSClient,
                             table_name: str,
@@ -81,9 +84,13 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
     if not isinstance(statement, (node.ASTSelectStatement, node.ASTUpdateStatement, node.ASTDeleteStatement)):
         raise NotSupportedError(f"不支持的语句类型: {statement.__class__.__name__}")
 
+    # ---------- 计算在 SQL 语句各部分所需的字段清单 ----------
+
     where_field_set = set()  # 在 WHERE 子句中需要索引的字段清单
     order_field_set = set()  # 在 ORDER BY 子句中需要索引的字段清单
     other_field_set = set()  # 在聚合、GROUP BY 中需要索引的字段清单
+    order_asc_field_list = []  # 在 ORDER BY 子句中升序排序的字段列表（有序）
+    order_desc_field_list = []  # 在 ORDER BY 子句中降序排序的字段列表（有序）
 
     # 对于 SELECT 语句，需要额外将聚集函数中使用的字段添加到需要索引的字段集合中
     if isinstance(statement, node.ASTSingleSelectStatement):
@@ -105,28 +112,151 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
         if quote_column.column_name not in alias_set:  # 如果是别名则不需要索引
             order_field_set.add(quote_column.column_name)
 
-    # 优先获取多元索引
+    # ---------- 检查是否存在满足条件的多元索引 ----------
     need_field_set = other_field_set | where_field_set | order_field_set
     for _, index_name in ots_client.list_search_index(table_name):
-        index_field_set = sdk_api.get_index_field_set(ots_client, table_name, index_name)
+        index_field_set = sdk_api.get_search_index_field_set(ots_client, table_name, index_name)
         if index_field_set > need_field_set:
             return UseIndex(index_type=IndexType.SEARCH_INDEX, index_name=index_name)
 
+    # ---------- 检查主键索引能否满足查询条件 ----------
+    # 如果存在主键索引不支持的查询方式，则抛出异常
     if other_field_set:
         raise ProgrammingError("没有能够满足查询条件的多元索引；或 SQL 语句中包含聚合函数、GROUP BY 导致无法使用主键索引")
 
-    # 如果没有满足条件的多元索引，尝试使用主键索引
-    try:
-        describe_response = ots_client.describe_table(table_name)
-        n_match = 0
-        for field_name, field_type in describe_response.table_meta.schema_of_primary_key:
-            if field_name not in where_field_set:
-                break
-            n_match += 1
-    except Exception:
-        raise ProgrammingError("获取表描述信息失败")
+    # 获取主键所有的字段列表
+    primary_key_list = sdk_api.get_primary_key_field_list(ots_client, table_name)
+    primary_key_set = set(primary_key_list)
 
-    if n_match == len(where_field_set):
-        return UseIndex(index_type=IndexType.PRIMARY_KEY_RANGE)  # 主键索引按顺序包含所有查询字段
-    else:
+    # 检查是否包含主键索引之外的 WHERE 条件 TODO 增加使用过滤条件的主键索引查询方法
+    if len(where_field_set - primary_key_set) > 0:
         raise ProgrammingError("没有能够满足查询条件的多元索引和主键索引")
+
+    # TODO 增加排序逻辑检查功能
+
+    # ---------- 整理主键索引的查询条件 ----------
+    conditions = get_condition_in_where_clause(statement.where_clause.condition)
+    condition_of_field = collections.defaultdict(lambda: collections.defaultdict(list))
+    for field_name, op, value in conditions:
+        condition_of_field[field_name][op].append(value)
+
+    # ---------- 构造逐渐索引查询规则 ----------
+    # 条件中的字段数等于主键字段数，可以考虑时间单点查询或批量查询
+    # if len(condition_of_field) == len(primary_key_set):
+
+
+def get_condition_in_where_clause(ast_node: node.ASTBase) -> List[Tuple[str, str, Any]]:
+    """获取 WHERE 条件中包含的条件信息
+
+    Parameters
+    ----------
+    ast_node : ASTBase
+        抽象语法树节点
+    """
+    if isinstance(ast_node, node.ASTOperatorConditionExpression):  # 比较运算符的表达式
+        if ast_node.operator.source() == "=":
+            if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
+                    and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
+                # 字段名 = 字面值
+                return [
+                    (ast_node.before_value.column_name, "=", ast_node.after_value.as_string().strip("'")),
+                ]
+            elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
+                  and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
+                # 字面值 = 字段名
+                return [
+                    (ast_node.after_value.column_name, "=", ast_node.before_value.as_string().strip("'")),
+                ]
+            raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
+        if ast_node.operator.source() == "<":
+            if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
+                    and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
+                # 字段名 < 字面值
+                return [
+                    (ast_node.before_value.column_name, "<", ast_node.after_value.as_string().strip("'")),
+                ]
+            elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
+                  and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
+                # 字面值 < 字面名
+                return [
+                    (ast_node.after_value.column_name, "<", ast_node.before_value.as_string().strip("'")),
+                ]
+            raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
+        if ast_node.operator.source() == "<=":
+            if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
+                    and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
+                # 字段名 <= 字面值
+                return [
+                    (ast_node.before_value.column_name, "<=", ast_node.after_value.as_string().strip("'")),
+                ]
+            elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
+                  and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
+                # 字面值 <= 字段名
+                return [
+                    (ast_node.after_value.column_name, "<=", ast_node.before_value.as_string().strip("'")),
+                ]
+            raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
+        if ast_node.operator.source() == ">":
+            if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
+                    and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
+                # 字段名 > 字面值
+                return [
+                    (ast_node.before_value.column_name, ">", ast_node.after_value.as_string().strip("'")),
+                ]
+            elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
+                  and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
+                # 字面值 > 字段名
+                return [
+                    (ast_node.after_value.column_name, ">", ast_node.before_value.as_string().strip("'")),
+                ]
+            raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
+        if ast_node.operator.source() == ">=":
+            if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
+                    and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
+                # 字段名 >= 字面值
+                return [
+                    (ast_node.before_value.column_name, ">=", ast_node.after_value.as_string().strip("'")),
+                ]
+            elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
+                  and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
+                # 字面值 >= 字段名
+                return [
+                    (ast_node.after_value.column_name, ">=", ast_node.before_value.as_string().strip("'")),
+                ]
+            raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
+        if ast_node.operator.source() == "!=":
+            raise NotSupportedError("主键索引不支持 != 运算符")
+    if isinstance(ast_node, node.ASTBetweenExpression):  # BETWEEN 表达式
+        if not isinstance(ast_node.before_value, node.ASTColumnNameExpression):
+            raise NotSupportedError("暂不支持的表达式形式（BETWEEN 之前不是字段名）")
+        if (not isinstance(ast_node.from_value, node.ASTLiteralExpression) or
+                not isinstance(ast_node.to_value, node.ASTLiteralExpression)):
+            raise NotSupportedError("暂不支持的表达式形式（BETWEEN ... AND ... 中的两个值不是字面值）")
+        return [
+            (ast_node.before_value.column_name, ">=", ast_node.from_value.as_string().strip("'")),
+            (ast_node.before_value.column_name, "<=", ast_node.to_value.as_string().strip("'")),
+        ]
+    if isinstance(ast_node, node.ASTIsExpression):  # IS NULL 或 IS NOT NULL
+        raise NotSupportedError("主键索引不支持 IS 运算符")
+    if isinstance(ast_node, node.ASTInExpression):  # IN 语句
+        if not isinstance(ast_node.before_value, node.ASTColumnNameExpression):
+            raise NotSupportedError("暂不支持的表达式形式（IN 之前不是字段名）")
+        if not isinstance(ast_node.after_value, node.ASTSubValueExpression):
+            raise NotSupportedError("暂不支持的表达式形式（IN 之后不是值列表）")
+        return [
+            (ast_node.before_value.column_name, "IN",
+             [value.source().strip("'") for value in ast_node.after_value.values]),
+        ]
+    if isinstance(ast_node, node.ASTLikeExpression):  # LIKE 语句
+        raise NotSupportedError("主键索引不支持 LIKE 运算符")
+    if isinstance(ast_node, node.ASTLogicalAndExpression):  # 逻辑与表达式
+        condition1: List[tuple] = get_condition_in_where_clause(ast_node.before_value)
+        condition2: List[tuple] = get_condition_in_where_clause(ast_node.after_value)
+        return condition1 + condition2
+    if isinstance(ast_node, node.ASTLogicalOrExpression):  # 逻辑或表达式
+        raise NotSupportedError("主键索引不支持 OR 运算符")
+    if isinstance(ast_node, node.ASTLogicalNotExpression):  # 逻辑否表达式
+        raise NotSupportedError("主键索引不支持 NOT 运算符")
+    if isinstance(ast_node, node.ASTLogicalXorExpression):  # 逻辑异或表达式
+        raise NotSupportedError("主键索引不支持 XOR 运算符")
+    raise KeyError(f"暂无法支持的 WHERE 条件（不是比较运算符的形式）: {ast_node}")
