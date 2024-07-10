@@ -39,7 +39,7 @@ class UseIndex:
     primary_key: Optional[List[tuple]] = dataclasses.field(kw_only=True, default=None)
 
     # 主键列表（仅主键索引 - 读取多行数据使用）
-    primary_key_list: Optional[List[List[tuple]]] = dataclasses.field(kw_only=True, default=None)
+    rows_to_get: Optional[List[List[tuple]]] = dataclasses.field(kw_only=True, default=None)
 
     # 主键起始值（仅主键索引 - 读取范围数据使用）
     start_key: Optional[List[tuple]] = dataclasses.field(kw_only=True, default=None)
@@ -136,13 +136,49 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
 
     # ---------- 整理主键索引的查询条件 ----------
     conditions = get_condition_in_where_clause(statement.where_clause.condition)
-    condition_of_field = collections.defaultdict(lambda: collections.defaultdict(list))
+    condition_of_field = collections.defaultdict(list)
     for field_name, op, value in conditions:
-        condition_of_field[field_name][op].append(value)
+        condition_of_field[field_name].append((op, value))
+
+    must_range = False  # 是否一定需要范围查询
+    must_accurate = False  # 是否一定需要精确查询（单条或范围）
+    primary_key_conditions = []
+    for field_name in primary_key_list:
+        if field_name not in condition_of_field:
+            # 该字段没有查询条件
+            primary_key_conditions.append((field_name, "RANGE", tablestore.INF_MIN, tablestore.INF_MAX))
+            must_range = True
+        else:
+            condition = condition_of_field[field_name]
+            if len(condition) == 2:
+                condition.sort()
+                if condition[0][0] != "<" or condition[1][0] != ">=":
+                    raise NotSupportedError("主键索引在同一个字段上包含 2 个条件时，必须一个是 >=，另一个是 <")
+                primary_key_conditions.append((field_name, "RANGE", condition[1][1], condition[0][1]))
+            elif len(condition) == 1:
+                op, value = condition[0]
+                if op == "IN":
+                    primary_key_conditions.append((field_name, "IN", value))
+                    must_accurate = True
+                elif op == "=":
+                    primary_key_conditions.append((field_name, "=", value, value))
+                elif op == "<":
+                    primary_key_conditions.append((field_name, "RANGE", tablestore.INF_MIN, value))
+                    must_range = True
+                elif op == ">=":
+                    primary_key_conditions.append((field_name, "RANGE", value, tablestore.INF_MAX))
+                    must_range = True
+                else:
+                    raise ProgrammingError(f"未知状态的 op: {op}")
+            else:
+                raise NotSupportedError("主键索引不支持在同一个字段上包含超过 2 个条件")
+
+    if must_accurate and must_range:
+        raise NotSupportedError("主键索引不支持在同时包含 IN 条件的范围查询条件")
 
     # ---------- 构造逐渐索引查询规则 ----------
     # 条件中的字段数等于主键字段数，可以考虑时间单点查询或批量查询
-    # if len(condition_of_field) == len(primary_key_set):
+    print(primary_key_conditions)
 
 
 def get_condition_in_where_clause(ast_node: node.ASTBase) -> List[Tuple[str, str, Any]]:
@@ -178,36 +214,30 @@ def get_condition_in_where_clause(ast_node: node.ASTBase) -> List[Tuple[str, str
             elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
                   and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
                 # 字面值 < 字面名
-                return [
-                    (ast_node.after_value.column_name, "<", ast_node.before_value.as_string().strip("'")),
-                ]
+                raise NotSupportedError("主键索引不支持 > 的查询方式，仅支持 >= 和 <")
             raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
         if ast_node.operator.source() == "<=":
             if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
                     and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
                 # 字段名 <= 字面值
-                return [
-                    (ast_node.before_value.column_name, "<=", ast_node.after_value.as_string().strip("'")),
-                ]
+                raise NotSupportedError("主键索引不支持 <= 的查询方式，仅支持 < 和 >=")
             elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
                   and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
                 # 字面值 <= 字段名
                 return [
-                    (ast_node.after_value.column_name, "<=", ast_node.before_value.as_string().strip("'")),
+                    (ast_node.after_value.column_name, ">=", ast_node.before_value.as_string().strip("'")),
                 ]
             raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
         if ast_node.operator.source() == ">":
             if (isinstance(ast_node.before_value, node.ASTColumnNameExpression)
                     and isinstance(ast_node.after_value, node.ASTLiteralExpression)):
                 # 字段名 > 字面值
-                return [
-                    (ast_node.before_value.column_name, ">", ast_node.after_value.as_string().strip("'")),
-                ]
+                raise NotSupportedError("主键索引不支持 > 的查询方式，仅支持 >= 和 <")
             elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
                   and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
                 # 字面值 > 字段名
                 return [
-                    (ast_node.after_value.column_name, ">", ast_node.before_value.as_string().strip("'")),
+                    (ast_node.after_value.column_name, "<", ast_node.before_value.as_string().strip("'")),
                 ]
             raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
         if ast_node.operator.source() == ">=":
@@ -219,23 +249,12 @@ def get_condition_in_where_clause(ast_node: node.ASTBase) -> List[Tuple[str, str
                 ]
             elif (isinstance(ast_node.before_value, node.ASTLiteralExpression)
                   and isinstance(ast_node.after_value, node.ASTColumnNameExpression)):
-                # 字面值 >= 字段名
-                return [
-                    (ast_node.after_value.column_name, ">=", ast_node.before_value.as_string().strip("'")),
-                ]
+                raise NotSupportedError("主键索引不支持 <= 的查询方式，仅支持 < 和 >=")
             raise NotSupportedError("暂不支持的表达式形式（比较运算符前后不是一个字段名、一个字面值）")
         if ast_node.operator.source() == "!=":
             raise NotSupportedError("主键索引不支持 != 运算符")
     if isinstance(ast_node, node.ASTBetweenExpression):  # BETWEEN 表达式
-        if not isinstance(ast_node.before_value, node.ASTColumnNameExpression):
-            raise NotSupportedError("暂不支持的表达式形式（BETWEEN 之前不是字段名）")
-        if (not isinstance(ast_node.from_value, node.ASTLiteralExpression) or
-                not isinstance(ast_node.to_value, node.ASTLiteralExpression)):
-            raise NotSupportedError("暂不支持的表达式形式（BETWEEN ... AND ... 中的两个值不是字面值）")
-        return [
-            (ast_node.before_value.column_name, ">=", ast_node.from_value.as_string().strip("'")),
-            (ast_node.before_value.column_name, "<=", ast_node.to_value.as_string().strip("'")),
-        ]
+        raise NotSupportedError("主键索引不支持闭区间的 BETWEEN 表达式")
     if isinstance(ast_node, node.ASTIsExpression):  # IS NULL 或 IS NOT NULL
         raise NotSupportedError("主键索引不支持 IS 运算符")
     if isinstance(ast_node, node.ASTInExpression):  # IN 语句
