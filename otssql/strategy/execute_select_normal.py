@@ -9,8 +9,8 @@ import tablestore
 from metasequoia_sql import node
 from otssql import convert, sdk_api
 from otssql.constants import FieldType
-from otssql.exceptions import NotSupportedError
 from otssql.metasequoia_enhance import get_select_column_set
+from otssql.strategy import UseIndex, IndexType
 from otssql.strategy.detect_type import detect_field_type
 
 __all__ = ["execute_select_normal"]
@@ -18,7 +18,7 @@ __all__ = ["execute_select_normal"]
 
 def execute_select_normal(ots_client: tablestore.OTSClient,
                           table_name: str,
-                          index_name: str,
+                          use_index: UseIndex,
                           statement: node.ASTSingleSelectStatement,
                           max_row_per_request: int,
                           max_select_row: int,
@@ -31,8 +31,8 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
         tablestore SDK 客户端
     table_name : str
         tablestore 表名
-    index_name : str
-        tablestore 索引名
+    use_index : UseIndex
+        使用索引
     statement : node.ASTSingleSelectStatement
         执行的 SQL 语句节点对象
     max_row_per_request : int
@@ -55,11 +55,18 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
 
     select_column_set = get_select_column_set(statement.select_clause)
 
-    query = convert.convert_where_clause(statement.where_clause)
-    query_result = list(sdk_api.do_query(
-        ots_client=ots_client, table_name=table_name, index_name=index_name,
-        query=query, sort=sort, offset=offset, limit=limit,
-        return_type=tablestore.ColumnReturnType.ALL, max_row_per_request=max_row_per_request))
+    if use_index.index_type == IndexType.SEARCH_INDEX:
+        query = convert.convert_where_clause(statement.where_clause)
+        query_result = list(sdk_api.do_query(
+            ots_client=ots_client, table_name=table_name, index_name=use_index.index_name,
+            query=query, sort=sort, offset=offset, limit=limit,
+            return_type=tablestore.ColumnReturnType.ALL, max_row_per_request=max_row_per_request))
+    elif use_index.index_type == IndexType.PRIMARY_KEY_GET:
+        query_result = list(sdk_api.get_row(
+            ots_client=ots_client, table_name=table_name, primary_key=use_index.primary_key,
+            limit=limit, offset=offset
+        ))
+        print(query_result)
 
     # 汇总所有记录的结果字段（因为每一条记录返回的字段可能不一致）
     columns_set = set()

@@ -89,8 +89,6 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
     where_field_set = set()  # 在 WHERE 子句中需要索引的字段清单
     order_field_set = set()  # 在 ORDER BY 子句中需要索引的字段清单
     other_field_set = set()  # 在聚合、GROUP BY 中需要索引的字段清单
-    order_asc_field_list = []  # 在 ORDER BY 子句中升序排序的字段列表（有序）
-    order_desc_field_list = []  # 在 ORDER BY 子句中降序排序的字段列表（有序）
 
     # 对于 SELECT 语句，需要额外将聚集函数中使用的字段添加到需要索引的字段集合中
     if isinstance(statement, node.ASTSingleSelectStatement):
@@ -134,6 +132,9 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
 
     # TODO 增加排序逻辑检查功能
 
+    if len(order_field_set) > 0:
+        raise NotSupportedError("主键索引暂时不支持 ORDER BY 子句")  # TODO 待支持
+
     # ---------- 整理主键索引的查询条件 ----------
     conditions = get_condition_in_where_clause(statement.where_clause.condition)
     condition_of_field = collections.defaultdict(list)
@@ -158,7 +159,7 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
             elif len(condition) == 1:
                 op, value = condition[0]
                 if op == "IN":
-                    primary_key_conditions.append((field_name, "IN", value))
+                    primary_key_conditions.append((field_name, "IN", value, value))
                     must_accurate = True
                 elif op == "=":
                     primary_key_conditions.append((field_name, "=", value, value))
@@ -177,8 +178,48 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
         raise NotSupportedError("主键索引不支持在同时包含 IN 条件的范围查询条件")
 
     # ---------- 构造逐渐索引查询规则 ----------
-    # 条件中的字段数等于主键字段数，可以考虑时间单点查询或批量查询
-    print(primary_key_conditions)
+    if not must_range:
+        # 逐个字段生成主键索引的值列表
+        last_primary_key = [tuple()]
+        for field_name, op, value, _ in primary_key_conditions:
+            assert op in {"=", "IN"}, "主键索引非范围查询逻辑中包含非 = 和 IN 的条件"
+            new_primary_key = []
+            if op == "=":
+                for key in last_primary_key:
+                    new_primary_key.append(key + ((field_name, value),))
+            else:  # op == "IN"
+                for key in last_primary_key:
+                    for v in value:
+                        new_primary_key.append(key + ((field_name, v),))
+            last_primary_key = new_primary_key
+        rows_to_get = [list(primary_key) for primary_key in last_primary_key]
+        if len(rows_to_get) == 1:
+            # 使用主键索引 - 单行查询
+            return UseIndex(
+                index_type=IndexType.PRIMARY_KEY_GET,
+                primary_key=rows_to_get[0]
+            )
+        else:
+            # 使用主键索引 - 多行查询
+            return UseIndex(
+                index_type=IndexType.PRIMARY_KEY_BATCH,
+                rows_to_get=rows_to_get
+            )
+
+    else:
+        # 使用主键索引 - 范围查询
+        start_key = []
+        end_key = []
+        for field_name, op, min_value, max_value in primary_key_conditions:
+            assert op in {"=", "RANGE"}, "主键索引范围查询中包含非 = 和 RANGE 的条件"
+            start_key.append((field_name, min_value))
+            end_key.append((field_name, max_value))
+        return UseIndex(
+            index_type=IndexType.PRIMARY_KEY_RANGE,
+            start_key=start_key,
+            end_key=end_key,
+            direction="FORWARD"
+        )
 
 
 def get_condition_in_where_clause(ast_node: node.ASTBase) -> List[Tuple[str, str, Any]]:

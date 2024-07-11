@@ -310,6 +310,8 @@ class Cursor:
             table_name=table_name,
             statement=statement)
 
+        print(use_index)
+
         if isinstance(statement, node.ASTSingleSelectStatement):
             if statement.group_by_clause is not None:
                 # 执行包含 GROUP BY 的 SELECT 语句
@@ -327,7 +329,7 @@ class Cursor:
             if not is_aggregation_query(statement):
                 # 执行非聚合、非 GROUP BY 的普通 SELECT 语句
                 self.current_result, self.description = strategy.execute_select_normal(
-                    self.connection.ots_client, table_name, use_index.index_name, statement,
+                    self.connection.ots_client, table_name, use_index, statement,
                     max_row_per_request=self.connection.max_row_per_request,
                     max_select_row=self.connection.max_select_row,
                     max_row_total_limit=self.connection.max_row_total_limit)

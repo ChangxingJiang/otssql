@@ -2,11 +2,12 @@
 执行查询逻辑
 """
 
-from typing import Generator
+from typing import Generator, List
 
 import tablestore
 
-from otssql.exceptions import NotSupportedError
+
+__all__ = ["do_query", "get_row"]
 
 
 def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
@@ -71,9 +72,12 @@ def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
                 return
 
 
-def do_query_use_primary_key(ots_client: tablestore.OTSClient, table_name: str, offset: int, limit: int,
-                             ) -> Generator[tuple, None, None]:
-    """使用主键索引执行查询，并 yield 每一个生产结果
+def get_row(ots_client: tablestore.OTSClient, table_name: str, primary_key: List[tuple],
+            limit: int, offset: int, max_version: int = 1
+            ) -> Generator[tuple, None, None]:
+    """使用主键索引执行单行查询
+
+    TODO 待新增 time_range 功能
 
     Parameters
     ----------
@@ -81,46 +85,23 @@ def do_query_use_primary_key(ots_client: tablestore.OTSClient, table_name: str, 
         OTS 客户端
     table_name : str
         OTS 表名
-    offset : int
-        LIMIT 子句中的 OFFSET
+    primary_key : List[tuple]
+        主键值
     limit : int
         LIMIT 子句中的 LIMIT
+    offset : int
+        LIMIT 子句中的 OFFSET
+    max_version : int, default = 1
+        最多读取的版本数
 
     Yields
     ------
     tuple
         每个字段的信息
     """
-    if offset != 0:
-        raise NotSupportedError("使用主键索引时不支持 ORDER BY 子句的 offset 条件")
-
-    consumed, next_start_primary_key, row_list, next_token = ots_client.get_range(
-        table_name,
-        tablestore.Direction.FORWARD,
-        inclusive_start_primary_key, exclusive_end_primary_key,
-        limit,
-        max_version=1
+    consumed, return_row, next_token = ots_client.get_row(
+        table_name=table_name,
+        primary_key=primary_key,
+        max_version=max_version
     )
-
-    for row in row_list:
-        yield row
-        n_yield = 0
-        if n_yield >= limit:
-            return
-
-    # 当 next_start_primary_key 不为空时，则继续读取数据
-    while next_start_primary_key is not None:
-        inclusive_start_primary_key = next_start_primary_key
-        consumed, next_start_primary_key, row_list, next_token = ots_client.get_range(
-            table_name,
-            tablestore.Direction.FORWARD,
-            inclusive_start_primary_key, exclusive_end_primary_key,
-            limit,
-            max_version=1
-        )
-
-        for row in row_list:
-            yield row
-            n_yield = 0
-            if n_yield >= limit:
-                return
+    yield [return_row.primary_key, return_row.attribute_columns]
