@@ -156,6 +156,7 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
                 if condition[0][0] != "<" or condition[1][0] != ">=":
                     raise NotSupportedError("主键索引在同一个字段上包含 2 个条件时，必须一个是 >=，另一个是 <")
                 primary_key_conditions.append((field_name, "RANGE", condition[1][1], condition[0][1]))
+                must_range = True
             elif len(condition) == 1:
                 op, value = condition[0]
                 if op == "IN":

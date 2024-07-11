@@ -70,8 +70,13 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
             ots_client=ots_client, table_name=table_name, rows_to_get=use_index.rows_to_get
         ))
     else:  # use_index.index_type = IndexType.PRIMARY_KEY_RANGE
-
-
+        query_result = list(sdk_api.get_range(
+            ots_client=ots_client, table_name=table_name,
+            inclusive_start_primary_key=use_index.start_key,
+            exclusive_end_primary_key=use_index.end_key,
+            offset=offset, limit=limit,
+            max_row_per_request=max_row_per_request
+        ))
 
     # 汇总所有记录的结果字段（因为每一条记录返回的字段可能不一致）
     columns_set = set()
