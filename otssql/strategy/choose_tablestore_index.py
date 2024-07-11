@@ -1,54 +1,19 @@
 """
 自动选择 tablestore 的多元索引
 """
+
 import collections
-import dataclasses
-import enum
-from typing import List, Optional, Tuple, Any
+from typing import List, Tuple, Any
 
 import tablestore
 
 from metasequoia_sql import node
-from otssql import sdk_api
 from otssql.exceptions import NotSupportedError, ProgrammingError
 from otssql.metasequoia_enhance import get_aggregation_columns_in_node, get_columns_in_node, get_select_alias_set
+from otssql.objects import IndexType, UseIndex
+from otssql.sdk_api.get_index_field_set import get_search_index_field_set, get_primary_key_field_list
 
-__all__ = ["choose_tablestore_index", "UseIndex", "IndexType"]
-
-
-class IndexType(enum.IntEnum):
-    """索引类型"""
-
-    SEARCH_INDEX = 1  # 多元索引
-    PRIMARY_KEY_GET = 2  # 主键索引：读取单行数据
-    PRIMARY_KEY_BATCH = 3  # 主键索引：读取多行数据
-    PRIMARY_KEY_RANGE = 4  # 主键索引：读取范围数据
-
-
-@dataclasses.dataclass(slots=True, frozen=True, eq=True)
-class UseIndex:
-    """使用的索引类"""
-
-    # 索引类型
-    index_type: IndexType = dataclasses.field(kw_only=True)
-
-    # 索引名称（仅多元索引使用）
-    index_name: Optional[str] = dataclasses.field(kw_only=True, default=None)
-
-    # 主键（仅主键索引 - 读取单条数据使用）
-    primary_key: Optional[List[tuple]] = dataclasses.field(kw_only=True, default=None)
-
-    # 主键列表（仅主键索引 - 读取多行数据使用）
-    rows_to_get: Optional[List[List[tuple]]] = dataclasses.field(kw_only=True, default=None)
-
-    # 主键起始值（仅主键索引 - 读取范围数据使用）
-    start_key: Optional[List[tuple]] = dataclasses.field(kw_only=True, default=None)
-
-    # 主键结束值（仅主键索引 - 读取范围数据使用）
-    end_key: Optional[List[tuple]] = dataclasses.field(kw_only=True, default=None)
-
-    # 主键顺序（仅主键索引 - 读取范围数据使用）
-    direction: Optional[str] = dataclasses.field(kw_only=True, default=None)
+__all__ = ["choose_tablestore_index"]
 
 
 def choose_tablestore_index(ots_client: tablestore.OTSClient,
@@ -113,7 +78,7 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
     # ---------- 检查是否存在满足条件的多元索引 ----------
     need_field_set = other_field_set | where_field_set | order_field_set
     for _, index_name in ots_client.list_search_index(table_name):
-        index_field_set = sdk_api.get_search_index_field_set(ots_client, table_name, index_name)
+        index_field_set = get_search_index_field_set(ots_client, table_name, index_name)
         if index_field_set > need_field_set:
             return UseIndex(index_type=IndexType.SEARCH_INDEX, index_name=index_name)
 
@@ -123,7 +88,7 @@ def choose_tablestore_index(ots_client: tablestore.OTSClient,
         raise ProgrammingError("没有能够满足查询条件的多元索引；或 SQL 语句中包含聚合函数、GROUP BY 导致无法使用主键索引")
 
     # 获取主键所有的字段列表
-    primary_key_list = sdk_api.get_primary_key_field_list(ots_client, table_name)
+    primary_key_list = get_primary_key_field_list(ots_client, table_name)
     primary_key_set = set(primary_key_list)
 
     # 检查是否包含主键索引之外的 WHERE 条件 TODO 增加使用过滤条件的主键索引查询方法

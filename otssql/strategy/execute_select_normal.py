@@ -10,7 +10,7 @@ from metasequoia_sql import node
 from otssql import convert, sdk_api
 from otssql.constants import FieldType
 from otssql.metasequoia_enhance import get_select_column_set
-from otssql.strategy import UseIndex, IndexType
+from otssql.objects import UseIndex
 from otssql.strategy.detect_type import detect_field_type
 
 __all__ = ["execute_select_normal"]
@@ -49,34 +49,17 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
     description : List[tuple]
         字段描述信息
     """
-    sort = convert.convert_order_by_clause(statement.order_by_clause)
     offset, limit = convert.convert_limit_clause(statement.limit_clause, max_select_row,
                                                  max_row_total_limit=max_row_total_limit)
 
-    select_column_set = get_select_column_set(statement.select_clause)
+    query_result = list(sdk_api.do_query(
+        ots_client=ots_client, table_name=table_name, use_index=use_index,
+        statement=statement,
+        offset=offset, limit=limit,
+        return_type=tablestore.ColumnReturnType.ALL,
+        max_row_per_request=max_row_per_request))
 
-    if use_index.index_type == IndexType.SEARCH_INDEX:
-        query = convert.convert_where_clause(statement.where_clause)
-        query_result = list(sdk_api.do_query(
-            ots_client=ots_client, table_name=table_name, index_name=use_index.index_name,
-            query=query, sort=sort, offset=offset, limit=limit,
-            return_type=tablestore.ColumnReturnType.ALL, max_row_per_request=max_row_per_request))
-    elif use_index.index_type == IndexType.PRIMARY_KEY_GET:
-        query_result = list(sdk_api.get_row(
-            ots_client=ots_client, table_name=table_name, primary_key=use_index.primary_key
-        ))
-    elif use_index.index_type == IndexType.PRIMARY_KEY_BATCH:
-        query_result = list(sdk_api.get_batch_row(
-            ots_client=ots_client, table_name=table_name, rows_to_get=use_index.rows_to_get
-        ))
-    else:  # use_index.index_type = IndexType.PRIMARY_KEY_RANGE
-        query_result = list(sdk_api.get_range(
-            ots_client=ots_client, table_name=table_name,
-            inclusive_start_primary_key=use_index.start_key,
-            exclusive_end_primary_key=use_index.end_key,
-            offset=offset, limit=limit,
-            max_row_per_request=max_row_per_request
-        ))
+    select_column_set = get_select_column_set(statement.select_clause)
 
     # 汇总所有记录的结果字段（因为每一条记录返回的字段可能不一致）
     columns_set = set()

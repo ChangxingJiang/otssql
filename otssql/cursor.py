@@ -10,6 +10,7 @@ from metasequoia_sql import SQLParser, node
 from otssql import convert, strategy
 from otssql.exceptions import NotSupportedError, ProgrammingError
 from otssql.metasequoia_enhance import is_aggregation_query
+from otssql.objects import IndexType, UseIndex
 
 __all__ = ["Cursor", "DictCursor"]
 
@@ -305,7 +306,7 @@ class Cursor:
         table_name = convert.convert_table_name(statement)
 
         # 计算 tablestore 的索引名
-        use_index: strategy.UseIndex = strategy.choose_tablestore_index(
+        use_index: UseIndex = strategy.choose_tablestore_index(
             ots_client=self.connection.ots_client,
             table_name=table_name,
             statement=statement)
@@ -315,7 +316,7 @@ class Cursor:
         if isinstance(statement, node.ASTSingleSelectStatement):
             if statement.group_by_clause is not None:
                 # 执行包含 GROUP BY 的 SELECT 语句
-                if use_index.index_type != strategy.IndexType.SEARCH_INDEX:
+                if use_index.index_type != IndexType.SEARCH_INDEX:
                     raise NotSupportedError("无法在包含 GROUP BY 子句的情况下使用主键索引")
 
                 # TODO 增加 GROUP BY 语句包含通配符的异常
@@ -337,7 +338,7 @@ class Cursor:
                 self.rowcount = len(self.current_result)
                 return self.rowcount
 
-            if use_index.index_type != strategy.IndexType.SEARCH_INDEX:
+            if use_index.index_type != IndexType.SEARCH_INDEX:
                 raise NotSupportedError("无法在包含聚合函数的情况下使用主键索引")
 
             # 执行包含聚合的 SELECT 语句
@@ -349,11 +350,8 @@ class Cursor:
             return self.rowcount
 
         if isinstance(statement, node.ASTUpdateStatement):
-            if use_index.index_type != strategy.IndexType.SEARCH_INDEX:
-                raise NotSupportedError("暂不支持使用主键索引查询并执行 UPDATE 语句")  # TODO 待支持
-
             # 执行 UPDATE 语句
-            self.rowcount = strategy.execute_update(self.connection.ots_client, table_name, use_index.index_name,
+            self.rowcount = strategy.execute_update(self.connection.ots_client, table_name, use_index,
                                                     statement,
                                                     max_row_per_request=self.connection.max_row_per_request,
                                                     max_update_row=self.connection.max_update_row,
@@ -361,11 +359,8 @@ class Cursor:
             return self.rowcount
 
         if isinstance(statement, node.ASTDeleteStatement):
-            if use_index.index_type != strategy.IndexType.SEARCH_INDEX:
-                raise NotSupportedError("暂不支持使用主键索引查询并执行 DELETE 语句")  # TODO 待支持
-
             # 执行 DELETE 语句
-            self.rowcount = strategy.execute_delete(self.connection.ots_client, table_name, use_index.index_name,
+            self.rowcount = strategy.execute_delete(self.connection.ots_client, table_name, use_index,
                                                     statement,
                                                     max_row_per_request=self.connection.max_row_per_request,
                                                     max_delete_row=self.connection.max_delete_row,

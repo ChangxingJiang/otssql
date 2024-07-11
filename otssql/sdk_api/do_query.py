@@ -2,20 +2,81 @@
 执行查询逻辑
 """
 
-from typing import Generator, List
+from typing import Generator, List, Union
 
 import tablestore
 
+from metasequoia_sql import node
+from otssql import convert
 from otssql.exceptions import NotSupportedError
+from otssql.objects import IndexType, UseIndex
 
 __all__ = ["do_query", "get_row", "get_batch_row", "get_range"]
 
 
-def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
-             query: tablestore.Query, sort: tablestore.Sort, offset: int, limit: int,
+def do_query(ots_client: tablestore.OTSClient, table_name: str, use_index: UseIndex,
+             statement: Union[node.ASTSingleSelectStatement, node.ASTUpdateStatement, node.ASTDeleteStatement],
+             offset: int, limit: int,
              return_type: tablestore.ColumnReturnType,
              max_row_per_request: int
-             ) -> Generator[tuple, None, None]:
+             ) -> List[tuple]:
+    """执行查询，并 yield 每一个生产结果
+
+    Parameters
+    ----------
+    ots_client : tablestore.OTSClient
+        OTS 客户端
+    table_name : str
+        OTS 表名
+    use_index : UseIndex
+        使用索引
+    statement : ASTBase
+        SQL 语句
+    offset : int
+        LIMIT 子句中的 OFFSET
+    limit : int
+        LIMIT 子句中的 LIMIT
+    return_type : tablestore.ColumnReturnType
+        OTS 的返回类型
+    max_row_per_request : int
+        【Tablestore SDK】每次 tablestore 请求获取的记录数
+
+    Yields
+    ------
+    tuple
+        每个字段的信息
+    """
+    if use_index.index_type == IndexType.SEARCH_INDEX:
+        query = convert.convert_where_clause(statement.where_clause)
+        sort = convert.convert_order_by_clause(statement.order_by_clause)
+        query_result = list(search(
+            ots_client=ots_client, table_name=table_name, index_name=use_index.index_name,
+            query=query, sort=sort, offset=offset, limit=limit,
+            return_type=return_type, max_row_per_request=max_row_per_request))
+    elif use_index.index_type == IndexType.PRIMARY_KEY_GET:
+        query_result = list(get_row(
+            ots_client=ots_client, table_name=table_name, primary_key=use_index.primary_key
+        ))
+    elif use_index.index_type == IndexType.PRIMARY_KEY_BATCH:
+        query_result = list(get_batch_row(
+            ots_client=ots_client, table_name=table_name, rows_to_get=use_index.rows_to_get
+        ))
+    else:  # use_index.index_type = IndexType.PRIMARY_KEY_RANGE
+        query_result = list(get_range(
+            ots_client=ots_client, table_name=table_name,
+            inclusive_start_primary_key=use_index.start_key,
+            exclusive_end_primary_key=use_index.end_key,
+            offset=offset, limit=limit,
+            max_row_per_request=max_row_per_request
+        ))
+    return query_result
+
+
+def search(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
+           query: tablestore.Query, sort: tablestore.Sort, offset: int, limit: int,
+           return_type: tablestore.ColumnReturnType,
+           max_row_per_request: int
+           ) -> Generator[tuple, None, None]:
     """执行查询，并 yield 每一个生产结果
 
     Parameters
