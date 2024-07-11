@@ -6,8 +6,7 @@ from typing import Generator, List
 
 import tablestore
 
-
-__all__ = ["do_query", "get_row"]
+__all__ = ["do_query", "get_row", "get_batch_row"]
 
 
 def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
@@ -73,7 +72,7 @@ def do_query(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
 
 
 def get_row(ots_client: tablestore.OTSClient, table_name: str, primary_key: List[tuple],
-            limit: int, offset: int, max_version: int = 1
+            max_version: int = 1
             ) -> Generator[tuple, None, None]:
     """使用主键索引执行单行查询
 
@@ -87,10 +86,6 @@ def get_row(ots_client: tablestore.OTSClient, table_name: str, primary_key: List
         OTS 表名
     primary_key : List[tuple]
         主键值
-    limit : int
-        LIMIT 子句中的 LIMIT
-    offset : int
-        LIMIT 子句中的 OFFSET
     max_version : int, default = 1
         最多读取的版本数
 
@@ -105,3 +100,99 @@ def get_row(ots_client: tablestore.OTSClient, table_name: str, primary_key: List
         max_version=max_version
     )
     yield [return_row.primary_key, return_row.attribute_columns]
+
+
+def get_batch_row(ots_client: tablestore.OTSClient, table_name: str, rows_to_get: List[List[tuple]],
+                  max_version: int = 1
+                  ) -> Generator[tuple, None, None]:
+    """使用主键索引执行批量查询
+
+    TODO 待新增 time_range 功能
+
+    Parameters
+    ----------
+    ots_client : tablestore.OTSClient
+        OTS 客户端
+    table_name : str
+        OTS 表名
+    rows_to_get : List[List[tuple]]
+        主键值的列表
+    max_version : int, default = 1
+        最多读取的版本数
+
+    Yields
+    ------
+    tuple
+        每个字段的信息
+    """
+    request = tablestore.BatchGetRowRequest()
+    request.add(tablestore.TableInBatchGetRowItem(table_name, primary_keys=rows_to_get, max_version=max_version))
+    result = ots_client.batch_get_row(request)
+    table_result = result.get_result_by_table(table_name)
+    for item in table_result:
+        yield [item.row.primary_key, item.row.attribute_columns]
+
+
+def get_range(ots_client: tablestore.OTSClient, table_name: str,
+              inclusive_start_primary_key: List[tuple],
+              exclusive_end_primary_key: List[tuple],
+              offset: int, limit: int,
+              max_row_per_request: int
+              ) -> Generator[tuple, None, None]:
+    """执行查询，并 yield 每一个生产结果
+
+    TODO 待增加 direction 方向的设置
+
+    Parameters
+    ----------
+    ots_client : tablestore.OTSClient
+        OTS 客户端
+    table_name : str
+        OTS 表名
+    inclusive_start_primary_key : List[tuple]
+        起始主键
+    exclusive_end_primary_key : List[tuple]
+        结束主键
+    sort : tablestore.Sort
+        OTS 排序规则（相当于 ORDER BY 子句）
+    offset : int
+        LIMIT 子句中的 OFFSET
+    limit : int
+        LIMIT 子句中的 LIMIT
+    return_type : tablestore.ColumnReturnType
+        OTS 的返回类型
+    max_row_per_request : int
+        【Tablestore SDK】每次 tablestore 请求获取的记录数
+
+    Yields
+    ------
+    tuple
+        每个字段的信息
+    """
+
+    n_yield = 0
+
+    # 执行第一次查询
+    search_response: tablestore.metadata.SearchResponse = ots_client.search(
+        table_name, index_name,
+        tablestore.SearchQuery(query, sort=sort, offset=offset, limit=min(limit, max_row_per_request)),
+        tablestore.ColumnsToGet(return_type=return_type)
+    )
+    for row in search_response.rows:
+        yield row
+        n_yield += 1
+        if n_yield >= limit:
+            return
+
+    # 继续执行后续查询，直至查询完成
+    while search_response.next_token:
+        search_response: tablestore.metadata.SearchResponse = ots_client.search(
+            table_name, index_name,
+            tablestore.SearchQuery(query, next_token=search_response.next_token, limit=max_row_per_request),
+            tablestore.ColumnsToGet(return_type=return_type)
+        )
+        for row in search_response.rows:
+            yield row
+            n_yield += 1
+            if n_yield >= limit:
+                return

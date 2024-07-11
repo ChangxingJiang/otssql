@@ -63,10 +63,15 @@ def execute_select_normal(ots_client: tablestore.OTSClient,
             return_type=tablestore.ColumnReturnType.ALL, max_row_per_request=max_row_per_request))
     elif use_index.index_type == IndexType.PRIMARY_KEY_GET:
         query_result = list(sdk_api.get_row(
-            ots_client=ots_client, table_name=table_name, primary_key=use_index.primary_key,
-            limit=limit, offset=offset
+            ots_client=ots_client, table_name=table_name, primary_key=use_index.primary_key
         ))
-        print(query_result)
+    elif use_index.index_type == IndexType.PRIMARY_KEY_BATCH:
+        query_result = list(sdk_api.get_batch_row(
+            ots_client=ots_client, table_name=table_name, rows_to_get=use_index.rows_to_get
+        ))
+    else:  # use_index.index_type = IndexType.PRIMARY_KEY_RANGE
+
+
 
     # 汇总所有记录的结果字段（因为每一条记录返回的字段可能不一致）
     columns_set = set()
