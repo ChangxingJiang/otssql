@@ -178,7 +178,7 @@ def change_ast_node_to_tablestore_query(ast_node: node.ASTBase) -> tablestore.Qu
     if isinstance(ast_node, node.ASTIsExpression):  # IS NULL 或 IS NOT NULL
         if not isinstance(ast_node.before_value, node.ASTColumnNameExpression):
             raise NotSupportedError("暂不支持的表达式形式（IS 之前不是字段名）")
-        if not isinstance(ast_node.after_value, node.ASTLiteralExpression) or ast_node.after_value.value is not None:
+        if not isinstance(ast_node.after_value, node.ASTLiteralExpression) or ast_node.after_value.value.upper() != "NULL":
             raise NotSupportedError("暂不支持的表达式形式（IS 或 IS NOT 后不是 NULL）")
         condition = tablestore.ExistsQuery(ast_node.before_value.column_name)
         if ast_node.is_not:
