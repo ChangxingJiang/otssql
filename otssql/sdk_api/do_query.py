@@ -19,7 +19,7 @@ def do_query(ots_client: tablestore.OTSClient, table_name: str, use_index: UseIn
              offset: int, limit: int,
              return_type: tablestore.ColumnReturnType,
              max_row_per_request: int
-             ) -> List[tuple]:
+             ) -> Generator[tuple, None, None]:
     """执行查询，并 yield 每一个生产结果
 
     Parameters
@@ -49,27 +49,26 @@ def do_query(ots_client: tablestore.OTSClient, table_name: str, use_index: UseIn
     if use_index.index_type == IndexType.SEARCH_INDEX:
         query = convert.convert_where_clause(statement.where_clause)
         sort = convert.convert_order_by_clause(statement.order_by_clause)
-        query_result = list(search(
+        yield from search(
             ots_client=ots_client, table_name=table_name, index_name=use_index.index_name,
             query=query, sort=sort, offset=offset, limit=limit,
-            return_type=return_type, max_row_per_request=max_row_per_request))
+            return_type=return_type, max_row_per_request=max_row_per_request)
     elif use_index.index_type == IndexType.PRIMARY_KEY_GET:
-        query_result = list(get_row(
+        yield from get_row(
             ots_client=ots_client, table_name=table_name, primary_key=use_index.primary_key
-        ))
+        )
     elif use_index.index_type == IndexType.PRIMARY_KEY_BATCH:
-        query_result = list(get_batch_row(
+        yield from get_batch_row(
             ots_client=ots_client, table_name=table_name, rows_to_get=use_index.rows_to_get
-        ))
+        )
     else:  # use_index.index_type = IndexType.PRIMARY_KEY_RANGE
-        query_result = list(get_range(
+        yield from get_range(
             ots_client=ots_client, table_name=table_name,
             inclusive_start_primary_key=use_index.start_key,
             exclusive_end_primary_key=use_index.end_key,
             offset=offset, limit=limit,
             max_row_per_request=max_row_per_request
-        ))
-    return query_result
+        )
 
 
 def search(ots_client: tablestore.OTSClient, table_name: str, index_name: str,
