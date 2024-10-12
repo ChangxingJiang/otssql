@@ -8,8 +8,9 @@ from typing import Optional
 
 from metasequoia_sql import SQLParser, node
 from otssql import convert, strategy
-from otssql.metasequoia_enhance import is_aggregation_query
 from otssql.exceptions import NotSupportedError, ProgrammingError
+from otssql.metasequoia_enhance import is_aggregation_query
+from otssql.objects import IndexType, UseIndex
 
 __all__ = ["Cursor", "DictCursor"]
 
@@ -305,14 +306,22 @@ class Cursor:
         table_name = convert.convert_table_name(statement)
 
         # 计算 tablestore 的索引名
-        index_name = strategy.choose_tablestore_index(self.connection.ots_client, table_name, statement)
+        use_index: UseIndex = strategy.choose_tablestore_index(
+            ots_client=self.connection.ots_client,
+            table_name=table_name,
+            statement=statement)
+
+        print(use_index)
 
         if isinstance(statement, node.ASTSingleSelectStatement):
             if statement.group_by_clause is not None:
                 # 执行包含 GROUP BY 的 SELECT 语句
+                if use_index.index_type != IndexType.SEARCH_INDEX:
+                    raise NotSupportedError("无法在包含 GROUP BY 子句的情况下使用主键索引")
+
                 # TODO 增加 GROUP BY 语句包含通配符的异常
                 self.current_result, self.description = strategy.execute_select_group_by(
-                    self.connection.ots_client, table_name, index_name, statement,
+                    self.connection.ots_client, table_name, use_index.index_name, statement,
                     max_group_size=self.connection.max_group_size)
                 self.current_idx = 0
                 self.rowcount = len(self.current_result)
@@ -321,7 +330,7 @@ class Cursor:
             if not is_aggregation_query(statement):
                 # 执行非聚合、非 GROUP BY 的普通 SELECT 语句
                 self.current_result, self.description = strategy.execute_select_normal(
-                    self.connection.ots_client, table_name, index_name, statement,
+                    self.connection.ots_client, table_name, use_index, statement,
                     max_row_per_request=self.connection.max_row_per_request,
                     max_select_row=self.connection.max_select_row,
                     max_row_total_limit=self.connection.max_row_total_limit)
@@ -329,17 +338,21 @@ class Cursor:
                 self.rowcount = len(self.current_result)
                 return self.rowcount
 
+            if use_index.index_type != IndexType.SEARCH_INDEX:
+                raise NotSupportedError("无法在包含聚合函数的情况下使用主键索引")
+
             # 执行包含聚合的 SELECT 语句
             self.current_result, self.description = strategy.execute_select_aggregation(self.connection.ots_client,
                                                                                         table_name,
-                                                                                        index_name, statement)
+                                                                                        use_index.index_name, statement)
             self.current_idx = 0
             self.rowcount = len(self.current_result)
             return self.rowcount
 
         if isinstance(statement, node.ASTUpdateStatement):
             # 执行 UPDATE 语句
-            self.rowcount = strategy.execute_update(self.connection.ots_client, table_name, index_name, statement,
+            self.rowcount = strategy.execute_update(self.connection.ots_client, table_name, use_index,
+                                                    statement,
                                                     max_row_per_request=self.connection.max_row_per_request,
                                                     max_update_row=self.connection.max_update_row,
                                                     max_row_total_limit=self.connection.max_row_total_limit)
@@ -347,7 +360,8 @@ class Cursor:
 
         if isinstance(statement, node.ASTDeleteStatement):
             # 执行 DELETE 语句
-            self.rowcount = strategy.execute_delete(self.connection.ots_client, table_name, index_name, statement,
+            self.rowcount = strategy.execute_delete(self.connection.ots_client, table_name, use_index,
+                                                    statement,
                                                     max_row_per_request=self.connection.max_row_per_request,
                                                     max_delete_row=self.connection.max_delete_row,
                                                     max_row_total_limit=self.connection.max_row_total_limit)

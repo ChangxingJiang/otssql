@@ -2,14 +2,14 @@
 执行更新逻辑
 """
 
-from typing import List, Dict
+from typing import Dict, Iterable
 
 import tablestore
 
 __all__ = ["do_multi_update", "do_one_update_request"]
 
 
-def do_multi_update(ots_client: tablestore.OTSClient, table_name: str, primary_key_list: List[tuple],
+def do_multi_update(ots_client: tablestore.OTSClient, table_name: str, primary_key_list: Iterable[tuple],
                     attribute_columns: Dict[str, list]) -> int:
     """执行多条更新：将 table_name 中 primary_key_list 中主键对应的记录执行 attribute_columns 中的更新"""
     n_change = 0
@@ -21,6 +21,7 @@ def do_multi_update(ots_client: tablestore.OTSClient, table_name: str, primary_k
 
         if len(row_items) >= 200:
             n_change += do_one_update_request(ots_client, table_name, row_items)
+            print(f"already update: {n_change} ...")
             row_items = []
 
     if len(row_items) >= 1:

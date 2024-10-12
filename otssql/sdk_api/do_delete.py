@@ -2,14 +2,14 @@
 执行删除逻辑
 """
 
-from typing import List
+from typing import Iterable
 
 import tablestore
 
 __all__ = ["do_multi_delete", "do_one_delete_request"]
 
 
-def do_multi_delete(ots_client: tablestore.OTSClient, table_name: str, primary_key_list: List[tuple]) -> int:
+def do_multi_delete(ots_client: tablestore.OTSClient, table_name: str, primary_key_list: Iterable[tuple]) -> int:
     """执行多条删除：将 table_name 中 primary_key_list 中主键对应的记录删除"""
     n_change = 0
     row_items = []

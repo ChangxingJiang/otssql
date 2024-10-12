@@ -4,7 +4,7 @@
 规范文档：https://peps.python.org/pep-0249/#implementation-hints-for-module-authors
 """
 
-from typing import Type
+from typing import Type, List
 
 import tablestore
 
@@ -149,6 +149,32 @@ class Connection:
         """
         self._check_not_close()
         return cursor(self)
+
+    def list_table(self) -> List[str]:
+        """获取实例下所有表的表名"""
+        return self.ots_client.list_table()
+
+    def list_primary_key(self, table_name: str) -> List[tuple]:
+        """获取表中所有主键的列表"""
+        return self.ots_client.describe_table(table_name).table_meta.schema_of_primary_key
+
+    def list_search_index(self, table_name: str) -> List[str]:
+        """获取实例下所有多元索引的名称"""
+        return self.ots_client.list_search_index(table_name)
+
+    def list_search_key(self, table_name: str, index_name: str) -> List[tuple]:
+        """获取多元索引包含的字段列表"""
+        # 获取多元索引的信息
+        index_meta: tablestore.metadata.SearchIndexMeta
+        sync_stat: tablestore.metadata.SyncStat
+        index_meta, sync_stat = self.ots_client.describe_search_index(table_name, index_name)
+
+        # 获取多元索引的字段列表
+        result = []
+        field: tablestore.metadata.FieldSchema
+        for field in index_meta.fields:
+            result.append((field.field_name, field.field_type))
+        return result
 
     def __enter__(self):
         """实现 __enter__ 方法已支持 with 语法"""
