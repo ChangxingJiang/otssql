@@ -12,7 +12,7 @@ LIKE 表达式 > 通配符查询
 IS NULL 或 IS NOT NULL 表达式 > 列存在性查询
 """
 
-from typing import Tuple, List, Any
+from typing import Any, List, Tuple
 
 import tablestore
 
@@ -37,7 +37,8 @@ def convert_where_clause(where_clause: node.ASTWhereClause) -> tablestore.Query:
     """
     if where_clause is None:
         return tablestore.MatchAllQuery()
-    return change_ast_node_to_tablestore_query(where_clause.condition)
+    res = change_ast_node_to_tablestore_query(where_clause.condition)
+    return res
 
 
 def change_ast_node_to_tablestore_query(ast_node: node.ASTBase) -> tablestore.Query:
@@ -178,13 +179,14 @@ def change_ast_node_to_tablestore_query(ast_node: node.ASTBase) -> tablestore.Qu
     if isinstance(ast_node, node.ASTIsExpression):  # IS NULL 或 IS NOT NULL
         if not isinstance(ast_node.before_value, node.ASTColumnNameExpression):
             raise NotSupportedError("暂不支持的表达式形式（IS 之前不是字段名）")
-        if not isinstance(ast_node.after_value, node.ASTLiteralExpression) or ast_node.after_value.value.upper() != "NULL":
+        if not isinstance(ast_node.after_value,
+                          node.ASTLiteralExpression) or ast_node.after_value.value.upper() != "NULL":
             raise NotSupportedError("暂不支持的表达式形式（IS 或 IS NOT 后不是 NULL）")
         condition = tablestore.ExistsQuery(ast_node.before_value.column_name)
         if ast_node.is_not:
-            return tablestore.BoolQuery(must_not_queries=[condition])
-        else:
             return condition
+        else:
+            return tablestore.BoolQuery(must_not_queries=[condition])
     if isinstance(ast_node, node.ASTInExpression):  # IN 语句
         if not isinstance(ast_node.before_value, node.ASTColumnNameExpression):
             raise NotSupportedError("暂不支持的表达式形式（IN 之前不是字段名）")
